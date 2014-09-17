@@ -1,4 +1,4 @@
-crawlbot
+CrawlBot
 ========
 
 Crawlbot is a simple, efficient, and flexible webcrawler. Crawlbot is easy to use out-of-the-box, but also provides extensive flexibility for advanced users.
