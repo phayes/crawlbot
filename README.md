@@ -18,9 +18,9 @@ func main() {
 	crawler.Wait()
 }
 
-func myURLHandler(resp *Response) {
-	if resp.Error != nil {
-		log.Fatal(resp.Error)
+func myURLHandler(resp *crawlbot.Response) {
+	if resp.Err != nil {
+		log.Fatal(resp.Err)
 	}
 
 	fmt.Println("Found URL at " + resp.URL)
