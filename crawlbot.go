@@ -3,16 +3,15 @@ package crawlbot
 import (
 	"errors"
 	"github.com/moovweb/gokogiri/xml"
-	"mime"
 	"net/http"
-	"net/url"
 	"sync"
 	"time"
 )
 
 type State int
 
-// URL states
+// URL states.
+// You can query the current state of a url by calling Crawler.GetURL(url)
 const (
 	StateNotFound State = iota
 	StatePending  State = iota
@@ -87,92 +86,14 @@ type Crawler struct {
 	state    bool                      // True means running. False means stopped.
 }
 
-// The default URL Checker constrains the crawler to the domains of the seed URLs
-func defaultCheckURL(crawler *Crawler, checkurl string) bool {
-	parsedURL, err := url.Parse(checkurl)
-	if err != nil {
-		return false
-	}
-	for _, seedURL := range crawler.URLs {
-		parsedSeed, err := url.Parse(seedURL)
-		if err != nil {
-			return false
-		}
-		if parsedSeed.Host == parsedURL.Host {
-			return true
-		}
-	}
-	return false
-}
-
-// The default header checker will only proceed if it's 200 OK and an HTML Content-Type
-func defaultCheckHeader(crawler *Crawler, url string, status int, header http.Header) bool {
-	if status != 200 {
-		return false
-	}
-
-	contentType := header.Get("Content-Type")
-	if contentType == "" {
-		return false
-	}
-
-	mediaType, _, err := mime.ParseMediaType(contentType)
-	if err != nil {
-		return false
-	}
-
-	if mediaType == "text/html" || mediaType == "application/xhtml+xml" {
-		return true
-	} else {
-		return false
-	}
-}
-
-// The default link finder finds all <a href> links in an HMTL document
-func defaultLinkFinder(resp *Response) []string {
-	var newurls = make([]string, 0)
-
-	// If the document couldn't be parsed, there's nothing to do
-	if resp.Doc == nil {
-		return newurls
-	}
-
-	alinks, err := resp.Doc.Search("//a")
-	if err != nil {
-		return newurls
-	}
-
-	parsedURL, err := url.Parse(resp.URL)
-	if err != nil {
-		return newurls
-	}
-
-	for _, alink := range alinks {
-		link := alink.Attr("href")
-		parsedLink, err := url.Parse(link)
-		if err != nil {
-			continue
-		}
-		absLink := parsedURL.ResolveReference(parsedLink)
-		newurls = append(newurls, absLink.String())
-	}
-
-	return newurls
-}
-
-// The default client is the built-in net/http Client with a 15 second timeout
-func defaultClient() *http.Client {
-	return &http.Client{
-		Timeout: 15 * time.Second,
-	}
-}
-
 // Create a new simple crawler.
 // If more customization options are needed then a Crawler{} should be created directly.
 func NewCrawler(url string, handler func(resp *Response), numworkers int) *Crawler {
 	return &Crawler{URLs: []string{url}, Handler: handler, NumWorkers: numworkers}
 }
 
+// Start crawling. Start() will immidiately return; if you wish to wait for the crawl to finish
+// you will want to cal Wait() after calling Start().
 func (c *Crawler) Start() error {
 	// Check to see if the crawler is already running
 	if c.state {
@@ -296,13 +217,13 @@ func (c *Crawler) IsRunning() bool {
 	return c.state
 }
 
-// Stop a running crawler. This stops all new work but doesn't cancel ongoing jobs
+// Stop a running crawler. This stops all new work but doesn't cancel ongoing jobs.
 // After calling Stop(), call Wait() to wait for everything to finish
 func (c *Crawler) Stop() {
 	c.state = false
 }
 
-// Wait for the crawler to finish
+// Wait for the crawler to finish, blocking until it's done.
 // Calling this within a Handler function will cause a deadlock. Don't do this.
 func (c *Crawler) Wait() {
 	for {
@@ -318,8 +239,8 @@ func (c *Crawler) Wait() {
 }
 
 // Add a URL to the crawler.
-// If the item already exists this is a no-op
-// @@TODO: change this behavior so an item is re-queued if it already exists -- tricky if the item is StateRunning
+// If the item already exists this is a no-op.
+// TODO: change this behavior so an item is re-queued if it already exists -- tricky if the item is StateRunning
 func (c *Crawler) AddURL(url string) {
 	c.urlmux.Lock()
 	if _, ok := c.urlstate[url]; ok {
@@ -330,7 +251,7 @@ func (c *Crawler) AddURL(url string) {
 	c.urlmux.Unlock()
 }
 
-// Get the current state for a URL
+// Get the current state for a URL.
 func (c *Crawler) GetURL(url string) State {
 	c.urlmux.RLock()
 	defer c.urlmux.RUnlock()
