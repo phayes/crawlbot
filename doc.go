@@ -15,7 +15,7 @@ Crawlbot is a simple, efficient, and flexible webcrawler. Crawlbot is easy to us
 		fmt.Println("Found URL at " + resp.URL)
 	}
 
-CrawlBot provides extensive customizability for advances use cases. Please see documentation on crawlbot.Crawler and crawlbot.Response for more details.
+CrawlBot provides extensive customizability for advances use cases. Please see documentation on Crawler and Response for more details.
 
 	func main() {
 		crawler := crawlbot.Crawler{
