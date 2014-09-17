@@ -88,7 +88,7 @@ type Crawler struct {
 }
 
 // The default URL Checker constrains the crawler to the domains of the seed URLs
-func DefaultCheckURL(crawler *Crawler, checkurl string) bool {
+func defaultCheckURL(crawler *Crawler, checkurl string) bool {
 	parsedURL, err := url.Parse(checkurl)
 	if err != nil {
 		return false
@@ -106,7 +106,7 @@ func DefaultCheckURL(crawler *Crawler, checkurl string) bool {
 }
 
 // The default header checker will only proceed if it's 200 OK and an HTML Content-Type
-func DefaultCheckHeader(crawler *Crawler, url string, status int, header http.Header) bool {
+func defaultCheckHeader(crawler *Crawler, url string, status int, header http.Header) bool {
 	if status != 200 {
 		return false
 	}
@@ -129,7 +129,7 @@ func DefaultCheckHeader(crawler *Crawler, url string, status int, header http.He
 }
 
 // The default link finder finds all <a href> links in an HMTL document
-func DefaultLinkFinder(resp *Response) []string {
+func defaultLinkFinder(resp *Response) []string {
 	var newurls = make([]string, 0)
 
 	// If the document couldn't be parsed, there's nothing to do
@@ -161,7 +161,7 @@ func DefaultLinkFinder(resp *Response) []string {
 }
 
 // The default client is the built-in net/http Client with a 15 second timeout
-func DefaultClient() *http.Client {
+func defaultClient() *http.Client {
 	return &http.Client{
 		Timeout: 15 * time.Second,
 	}
@@ -194,16 +194,16 @@ func (c *Crawler) Start() error {
 
 	// Initialize the default functions
 	if c.CheckHeader == nil {
-		c.CheckHeader = DefaultCheckHeader
+		c.CheckHeader = defaultCheckHeader
 	}
 	if c.CheckURL == nil {
-		c.CheckURL = DefaultCheckURL
+		c.CheckURL = defaultCheckURL
 	}
 	if c.LinkFinder == nil {
-		c.LinkFinder = DefaultLinkFinder
+		c.LinkFinder = defaultLinkFinder
 	}
 	if c.Client == nil {
-		c.Client = DefaultClient
+		c.Client = defaultClient
 	}
 
 	// Initialize urlstate and the starting URLs
