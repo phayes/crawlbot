@@ -50,9 +50,9 @@ func main() {
 }
 
 // Print the title of the page
-func PrintTitle(resp *Response) {
-	if resp.Error != nil {
-		log.Println(err)
+func PrintTitle(resp *crawlbot.Response) {
+	if resp.Err != nil {
+		log.Println(resp.Err)
 	}
 
 	if resp.Doc != nil {
@@ -60,14 +60,14 @@ func PrintTitle(resp *Response) {
 		if err != nil {
 			log.Println(err)
 		}
-		fmt.Printf("Title of %s is %s\n", resp.URL, title)
+		fmt.Printf("Title of %s is %s\n", resp.URL, title[0].Content())
 	} else {
 		fmt.Println("HTML was not parsed for " + resp.URL)
 	}
 }
 
 // Crawl everything!
-func AllowEverything(crawler *Crawler, url string) bool {
+func AllowEverything(crawler *crawlbot.Crawler, url string) bool {
 	return true
 }
 
