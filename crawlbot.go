@@ -3,7 +3,9 @@ package crawlbot
 import (
 	"errors"
 	"github.com/moovweb/gokogiri/html"
+	"mime"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 )
@@ -29,16 +31,18 @@ type Response struct {
 }
 
 type Crawler struct {
-	URLs       []string     // A list of URLs to start crawling. This is your list of seed URLs
-	Handler    HandlerFunc  // Each page will be passed to this handler. Do your work here.
-	CheckURL   CheckURLFunc // Before a URL is followed it is passed to this function to see if it should be followed or not. This function should implement and return true or false.
-	NumWorkers int          // Number of concurrent workers
-	Client     ClientFunc   // The crawler will call this function when it needs a new http.Client to give to a worker. Uses DefaultClientFunc by default.
-	workers    []worker
-	urlstate   map[string]State          // List of URLs and their current state.
-	urlindex   map[State]map[string]bool // Index of URLs by their state
-	urlmux     sync.RWMutex
-	state      bool // False means stopped. true means running
+	URLs        []string                  // A list of URLs to start crawling. This is your list of seed URLs
+	NumWorkers  int                       // Number of concurrent workers
+	Handler     HandlerFunc               // Each page will be passed to this handler. Put your business logic here.
+	CheckURL    CheckURLFunc              // Before a URL is crawled it is passed to this function to see if it should be followed or not. By default we follow the link if it's in the same domain as our seed URLs.
+	CheckHeader CheckHeaderFunc           // Before reading in the body we can check the headers to see if we want to continue. By default we abort if it's not HTML.
+	LinkFinder  LinkFinderFunc            // Call this function to find new links in the document to crawl. By default it will find all <a href> links
+	Client      ClientFunc                // The crawler will call this function when it needs a new http.Client to give to a worker. By default it uses the built-in net/http Client.
+	workers     []worker                  // List of all workers
+	urlstate    map[string]State          // List of URLs and their current state.
+	urlindex    map[State]map[string]bool // Index of URLs by their state
+	urlmux      sync.RWMutex              // A mutex for protecting urlstate and urlindex
+	state       bool                      // True means running. False means stopped.
 }
 
 // For each page crawled this function will be called.
@@ -46,26 +50,71 @@ type Crawler struct {
 type HandlerFunc func(resp *Response)
 
 // Check to see if the target URL should be crawled.
-type CheckURLFunc func(url string) bool
+type CheckURLFunc func(crawler *Crawler, url string) bool
+
+// Check to see if the target should be crawled after inspecting headers
+type CheckHeaderFunc func(crawler *Crawler, url string, status int, header http.Header) bool
+
+// Find new URLs to crawl
+type LinkFinderFunc func(pres *Response) []string
 
 // Check to see if the target URL should be crawled.
 type ClientFunc func() *http.Client
 
-// The default client uses a simple transport
+// The default client is the built-in net/http Client with a 15 seconnd timeout
+// A sensible alternative might be a simple round-tripper (eg. github.com/pkulak/simpletransport/simpletransport)
+// If you wish to rate-throttle your crawler you would do so by implemting a custom http.Client
 func DefaultClientFunc() *http.Client {
 	return &http.Client{
 		Timeout: 15 * time.Second,
 	}
 }
 
-func NewCrawler(urls []string, handler HandlerFunc, checker CheckURLFunc, numworkers int) (*Crawler, error) {
-	if urls == nil || len(urls) == 0 {
-		return nil, errors.New("Cannot create a new crawler with no URLs")
+// The default URL Checker constrains the crawler to the domains of the seed URLs
+func DefaultCheckURLFunc(crawler *Crawler, checkurl string) bool {
+	parsedURL, err := url.Parse(checkurl)
+	if err != nil {
+		return false
 	}
-	if numworkers <= 0 {
-		return nil, errors.New("Cannot create a new crawler with zero workers")
+	for _, seedURL := range crawler.URLs {
+		parsedSeed, err := url.Parse(seedURL)
+		if err != nil {
+			return false
+		}
+		if parsedSeed.Host == parsedURL.Host {
+			return true
+		}
 	}
-	return &Crawler{URLs: urls, Handler: handler, CheckURL: checker, NumWorkers: numworkers, Client: DefaultClientFunc}, nil
+	return false
+}
+
+// The default header checker will only proceed if it's 200 OK and an HTML Content-Type
+func DefaultCheckHeaderFunc(crawler *Crawler, url string, status int, header http.Header) bool {
+	if status != 200 {
+		return false
+	}
+
+	contentType := header.Get("Content-Type")
+	if contentType == "" {
+		return false
+	}
+
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return false
+	}
+
+	if mediaType == "text/html" || mediaType == "application/xhtml+xml" {
+		return true
+	} else {
+		return false
+	}
+}
+
+// Create a new simple crawler
+// If more customization options are needed then a Craweler{} should be created directly.
+func NewCrawler(url string, handler HandlerFunc, numworkers int) *Crawler {
+	return &Crawler{URLs: []string{url}, Handler: handler, CheckURL: DefaultCheckURLFunc, NumWorkers: numworkers, Client: DefaultClientFunc}
 }
 
 func (c *Crawler) Start() error {
@@ -73,6 +122,10 @@ func (c *Crawler) Start() error {
 		return errors.New("Cannot start crawler that is already running")
 	} else {
 		c.state = true
+	}
+
+	if c.NumWorkers <= 0 {
+		panic("Cannot create a new crawler with zero workers")
 	}
 
 	// Initialize urlstate and the starting URLs
@@ -107,7 +160,7 @@ func (c *Crawler) Start() error {
 					if _, ok := c.urlstate[newurl]; ok {
 						continue // Ignore URLs we already have
 					}
-					if c.CheckURL(newurl) {
+					if c.CheckURL(c, newurl) {
 						c.urlstate[newurl] = StatePending
 						c.urlindex[StatePending][newurl] = true
 					} else {
@@ -167,6 +220,7 @@ func (c *Crawler) AddURL(url string) {
 	c.urlmux.Unlock()
 }
 
+// Get the current state for a URL
 func (c *Crawler) GetURL(url string) State {
 	c.urlmux.RLock()
 	defer c.urlmux.RUnlock()
