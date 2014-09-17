@@ -1,14 +1,19 @@
 package crawlbot
 
 import (
+	"errors"
 	"github.com/moovweb/gokogiri/html"
+	"github.com/moovweb/gokogiri/xml"
 	"github.com/moovweb/gokogiri/xpath"
 	"io/ioutil"
+	"mime"
 	"net/http"
-	"net/url"
+	"strings"
 )
 
 var xa = xpath.Compile(".//a")
+
+var ErrHeaderRejected = errors.New("Header Checker rejected URL")
 
 type worker struct {
 	state   bool         // true means busy / unavailable. false means idling and is ready for new work
@@ -39,66 +44,59 @@ func (w *worker) teardown() {
 
 func (w *worker) process() {
 	go func() {
-		// Parse the URL to ensure it's valid
-		parsedURL, err := url.Parse(w.url)
-		if err != nil {
-			w.sendResults(nil, err)
+		// Do the HTTP GET and create the response object
+		var resp Response
+		httpresp, err := w.client.Get(w.url)
+		if httpresp != nil {
+			resp = Response{Response: httpresp}
+		} else {
+			resp = Response{}
+		}
+		resp.URL = w.url
+		resp.Err = err
+		resp.Crawler = w.crawler
+		if resp.Err != nil {
+			w.crawler.Handler(&resp)
+			w.sendResults(nil, resp.Err)
 			return
 		}
 
-		// Do the HTTP GET and create the response object
-		resphttp, err := w.client.Get(w.url)
-		resp := Response{
-			Resp:    resphttp,
-			URL:     w.url,
-			Error:   err,
-			Crawler: w.crawler,
-		}
-		if resp.Error != nil {
-			w.crawler.Handler(&resp)
-			w.sendResults(nil, resp.Error)
+		// Check headers using HeaderCheck
+		if !w.crawler.CheckHeader(w.crawler, w.url, resp.StatusCode, resp.Header) {
+			resp.Err = ErrHeaderRejected
+			w.sendResults(nil, resp.Err)
 			return
 		}
 
 		// Read the body
-		resp.Bytes, resp.Error = ioutil.ReadAll(resphttp.Body)
-		resphttp.Body.Close()
-		if resp.Error != nil {
+		resp.Bytes, resp.Err = ioutil.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.Err != nil {
 			w.crawler.Handler(&resp)
-			w.sendResults(nil, resp.Error)
+			w.sendResults(nil, resp.Err)
 			return
 		}
 
-		// Parse the HTML
-		resp.Doc, resp.Error = html.Parse(resp.Bytes, html.DefaultEncodingBytes, []byte(w.url), html.DefaultParseOption, html.DefaultEncodingBytes)
-		defer resp.Doc.Free()
-		if resp.Error != nil {
-			w.crawler.Handler(&resp)
-			w.sendResults(nil, resp.Error)
-			return
+		// Parse the HTML / XML
+		if contentType := resp.Header.Get("Content-Type"); contentType != "" {
+			mediaType, _, err := mime.ParseMediaType(contentType)
+			if err == nil {
+				if mediaType == "text/html" {
+					var htmldoc *html.HtmlDocument
+					htmldoc, resp.Err = html.Parse(resp.Bytes, html.DefaultEncodingBytes, []byte(w.url), html.DefaultParseOption, html.DefaultEncodingBytes)
+					resp.Doc = htmldoc.XmlDocument
+				} else if mediaType == "application/xml" || mediaType == "text/xml" || strings.HasSuffix(mediaType, "+xml") {
+					resp.Doc, resp.Err = xml.Parse(resp.Bytes, html.DefaultEncodingBytes, []byte(w.url), html.DefaultParseOption, html.DefaultEncodingBytes)
+				}
+				defer resp.Doc.Free()
+			}
 		}
 
 		// Process the handler
 		w.crawler.Handler(&resp)
 
 		// Find links and finish
-		// @@TODO - Make this customizable but leave this behavior as default
-		var newurls = make([]string, 0)
-		alinks, err := resp.Doc.Search(xa)
-		if err != nil {
-			w.sendResults(nil, err)
-			return
-		}
-
-		for _, alink := range alinks {
-			link := alink.Attr("href")
-			parsedLink, err := url.Parse(link)
-			if err != nil {
-				continue
-			}
-			absLink := parsedURL.ResolveReference(parsedLink)
-			newurls = append(newurls, absLink.String())
-		}
+		newurls := w.crawler.LinkFinder(&resp)
 
 		// We're done, return the results
 		w.sendResults(newurls, nil)
