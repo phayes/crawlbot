@@ -31,47 +31,53 @@ type Response struct {
 }
 
 type Crawler struct {
-	URLs        []string                  // A list of URLs to start crawling. This is your list of seed URLs
-	NumWorkers  int                       // Number of concurrent workers
-	Handler     HandlerFunc               // Each page will be passed to this handler. Put your business logic here.
-	CheckURL    CheckURLFunc              // Before a URL is crawled it is passed to this function to see if it should be followed or not. By default we follow the link if it's in the same domain as our seed URLs.
-	CheckHeader CheckHeaderFunc           // Before reading in the body we can check the headers to see if we want to continue. By default we abort if it's not HTML.
-	LinkFinder  LinkFinderFunc            // Call this function to find new links in the document to crawl. By default it will find all <a href> links
-	Client      ClientFunc                // The crawler will call this function when it needs a new http.Client to give to a worker. By default it uses the built-in net/http Client.
-	workers     []worker                  // List of all workers
-	urlstate    map[string]State          // List of URLs and their current state.
-	urlindex    map[State]map[string]bool // Index of URLs by their state
-	urlmux      sync.RWMutex              // A mutex for protecting urlstate and urlindex
-	state       bool                      // True means running. False means stopped.
+	// A list of URLs to start crawling. This is your list of seed URLs.
+	URLs []string
+
+	// Number of concurrent workers
+	NumWorkers int
+
+	// For each page crawled this function will be called.
+	// This is where your business logic should reside.
+	// There is no default. If Handler is not set the crawler will panic.
+	Handler func(resp *Response)
+
+	// Before a URL is crawled it is passed to this function to see if it should be followed or not.
+	// By default we follow the link if it's in one of the same domains as our seed URLs.
+	CheckURL func(crawler *Crawler, url string) bool
+
+	// Before reading in the body we can check the headers to see if we want to continue.
+	// By default we abort if it's not HTTP 200 OK or not an html Content-Type.
+	// Override this function if you wish to handle non-html files such as binary images
+	CheckHeader func(crawler *Crawler, url string, status int, header http.Header) bool
+
+	// This function is called to find new urls in the document to crawl. By default it will
+	// find all <a href> links in an html document. Override this function if you wish to follow
+	// non <a href> links such as <img src>, or if you wish to find links in non-html documents.
+	LinkFinder func(pres *Response) []string
+
+	// The crawler will call this function when it needs a new http.Client to give to a worker.
+	// The default client is the built-in net/http Client with a 15 seconnd timeout
+	// A sensible alternative might be a simple round-tripper (eg. github.com/pkulak/simpletransport/simpletransport)
+	// If you wish to rate-throttle your crawler you would do so by implemting a custom http.Client
+	Client func() *http.Client
+
+	workers  []worker                  // List of all workers
+	urlstate map[string]State          // List of URLs and their current state.
+	urlindex map[State]map[string]bool // Index of URLs by their state
+	urlmux   sync.RWMutex              // A mutex for protecting urlstate and urlindex
+	state    bool                      // True means running. False means stopped.
 }
 
-// For each page crawled this function will be called.
-// This is where your business logic should reside.
-type HandlerFunc func(resp *Response)
-
-// Check to see if the target URL should be crawled.
-type CheckURLFunc func(crawler *Crawler, url string) bool
-
-// Check to see if the target should be crawled after inspecting headers
-type CheckHeaderFunc func(crawler *Crawler, url string, status int, header http.Header) bool
-
-// Find new URLs to crawl
-type LinkFinderFunc func(pres *Response) []string
-
-// Check to see if the target URL should be crawled.
-type ClientFunc func() *http.Client
-
-// The default client is the built-in net/http Client with a 15 seconnd timeout
-// A sensible alternative might be a simple round-tripper (eg. github.com/pkulak/simpletransport/simpletransport)
-// If you wish to rate-throttle your crawler you would do so by implemting a custom http.Client
-func DefaultClientFunc() *http.Client {
+// The default client is the built-in net/http Client with a 15 second timeout
+func DefaultClient() *http.Client {
 	return &http.Client{
 		Timeout: 15 * time.Second,
 	}
 }
 
 // The default URL Checker constrains the crawler to the domains of the seed URLs
-func DefaultCheckURLFunc(crawler *Crawler, checkurl string) bool {
+func DefaultCheckURL(crawler *Crawler, checkurl string) bool {
 	parsedURL, err := url.Parse(checkurl)
 	if err != nil {
 		return false
@@ -89,7 +95,7 @@ func DefaultCheckURLFunc(crawler *Crawler, checkurl string) bool {
 }
 
 // The default header checker will only proceed if it's 200 OK and an HTML Content-Type
-func DefaultCheckHeaderFunc(crawler *Crawler, url string, status int, header http.Header) bool {
+func DefaultCheckHeader(crawler *Crawler, url string, status int, header http.Header) bool {
 	if status != 200 {
 		return false
 	}
@@ -113,19 +119,38 @@ func DefaultCheckHeaderFunc(crawler *Crawler, url string, status int, header htt
 
 // Create a new simple crawler
 // If more customization options are needed then a Craweler{} should be created directly.
-func NewCrawler(url string, handler HandlerFunc, numworkers int) *Crawler {
-	return &Crawler{URLs: []string{url}, Handler: handler, CheckURL: DefaultCheckURLFunc, NumWorkers: numworkers, Client: DefaultClientFunc}
+func NewCrawler(url string, handler func(resp *Response), numworkers int) *Crawler {
+	return &Crawler{URLs: []string{url}, Handler: handler, NumWorkers: numworkers}
 }
 
 func (c *Crawler) Start() error {
+	// Check to see if the crawler is already running
 	if c.state {
 		return errors.New("Cannot start crawler that is already running")
 	} else {
 		c.state = true
 	}
 
+	// Sanity check
 	if c.NumWorkers <= 0 {
 		panic("Cannot create a new crawler with zero workers")
+	}
+	if c.Handler == nil {
+		panic("Cannot start a crawler that doesn't have a Hanlder function.")
+	}
+	if len(c.URLs) == 0 {
+		panic("Cannot start a crawler with no URLs.")
+	}
+
+	// Initialize the default functions
+	if c.CheckHeader == nil {
+		c.CheckHeader = DefaultCheckHeader
+	}
+	if c.CheckURL == nil {
+		c.CheckURL = DefaultCheckURL
+	}
+	if c.Client == nil {
+		c.Client = DefaultClient
 	}
 
 	// Initialize urlstate and the starting URLs
