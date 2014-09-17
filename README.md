@@ -3,7 +3,7 @@ CrawlBot
 
 [![GoDoc](https://godoc.org/github.com/phayes/crawlbot?status.svg)](https://godoc.org/github.com/phayes/crawlbot)
 
-Crawlbot is a simple, efficient, and flexible webcrawler. Crawlbot is easy to use out-of-the-box, but also provides extensive flexibility for advanced users.
+Crawlbot is a simple, efficient, and flexible webcrawler / spider. Crawlbot is easy to use out-of-the-box, but also provides extensive flexibility for advanced users.
 
 ```go
 package main
