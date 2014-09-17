@@ -137,7 +137,7 @@ func DefaultLinkFinder(resp *Response) []string {
 		return newurls
 	}
 
-	alinks, err := resp.Doc.Search(xa)
+	alinks, err := resp.Doc.Search("//a")
 	if err != nil {
 		return newurls
 	}

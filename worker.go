@@ -4,14 +4,11 @@ import (
 	"errors"
 	"github.com/moovweb/gokogiri/html"
 	"github.com/moovweb/gokogiri/xml"
-	"github.com/moovweb/gokogiri/xpath"
 	"io/ioutil"
 	"mime"
 	"net/http"
 	"strings"
 )
-
-var xa = xpath.Compile(".//a")
 
 var ErrHeaderRejected = errors.New("Header Checker rejected URL")
 
