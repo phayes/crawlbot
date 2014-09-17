@@ -15,6 +15,7 @@ import (
 func main() {
   crawler := NewCrawler("http://cnn.com", myURLHandler, 4)
   crawler.Start()
+  crawler.Wait()
 }
 
 func myURLHandler (resp *Response) {
@@ -25,3 +26,4 @@ func myURLHandler (resp *Response) {
   fmt.Println("Found URL at " + resp.URL)
 }
 ```
+

@@ -221,74 +221,100 @@ func (c *Crawler) Start() error {
 	}
 
 	// Start running in a for loop with selects
-	for {
-		select {
-		case res := <-results:
-			c.urlmux.Lock()
+	go func() {
+		for {
+			select {
+			case res := <-results:
+				c.urlmux.Lock()
 
-			res.owner.teardown()
+				res.owner.teardown()
 
-			if res.err == ErrHeaderRejected {
-				c.urlstate[res.url] = StateRejected
-				delete(c.urlindex[StateRejected], res.url)
-				c.urlindex[StateRejected][res.url] = true
-			} else {
-				c.urlstate[res.url] = StateDone
-				delete(c.urlindex[StateRunning], res.url)
-				c.urlindex[StateDone][res.url] = true
-			}
+				if res.err == ErrHeaderRejected {
+					c.urlstate[res.url] = StateRejected
+					delete(c.urlindex[StateRunning], res.url)
+					c.urlindex[StateRejected][res.url] = true
+				} else {
+					c.urlstate[res.url] = StateDone
+					delete(c.urlindex[StateRunning], res.url)
+					c.urlindex[StateDone][res.url] = true
+				}
 
-			if res.err == nil {
-				// Add the new items to our map
-				for _, newurl := range res.newurls {
-					if _, ok := c.urlstate[newurl]; ok {
-						continue // Ignore URLs we already have
-					}
-					if c.CheckURL(c, newurl) {
-						c.urlstate[newurl] = StatePending
-						c.urlindex[StatePending][newurl] = true
-					} else {
-						c.urlstate[newurl] = StateRejected
-						c.urlindex[StateRejected][newurl] = true
+				if res.err == nil {
+					// Add the new items to our map
+					for _, newurl := range res.newurls {
+						if _, ok := c.urlstate[newurl]; ok {
+							continue // Ignore URLs we already have
+						}
+						if c.CheckURL(c, newurl) {
+							c.urlstate[newurl] = StatePending
+							c.urlindex[StatePending][newurl] = true
+						} else {
+							c.urlstate[newurl] = StateRejected
+							c.urlindex[StateRejected][newurl] = true
+						}
 					}
 				}
-			}
 
-			// Assign more work to the worker
-			// If there's no work to do then skip
-			if len(c.urlindex[StatePending]) == 0 {
-				c.urlmux.Unlock()
-				continue // continue select
-			}
-
-			c.assignWork(res.owner)
-			c.urlmux.Unlock()
-		default:
-			c.urlmux.Lock()
-			if len(c.urlindex[StatePending]) == 0 && len(c.urlindex[StateRunning]) == 0 {
-				// We're done
-				c.state = false
-				c.urlmux.Unlock()
-				return nil
-			} else if len(c.urlindex[StatePending]) != 0 {
-				for i := range c.workers {
-					if !c.workers[i].state {
-						c.assignWork(&c.workers[i])
-						break
-					}
+				// Assign more work to the worker
+				// If there's no work to do or we're supposex to stop then skip
+				if len(c.urlindex[StatePending]) == 0 || !c.state {
+					c.urlmux.Unlock()
+					continue // continue select
 				}
+
+				c.assignWork(res.owner)
 				c.urlmux.Unlock()
-			} else {
-				c.urlmux.Unlock()
-				time.Sleep(100 * time.Millisecond)
+			default:
+				c.urlmux.Lock()
+				// If there is nothing running and either we have nothing pending or we are in a stopped state, then we're done
+				if len(c.urlindex[StateRunning]) == 0 && (len(c.urlindex[StatePending]) == 0 || !c.state) {
+					// We're done
+					c.state = false
+					c.urlmux.Unlock()
+					return
+				} else if len(c.urlindex[StatePending]) != 0 && c.state {
+					for i := range c.workers {
+						if !c.workers[i].state {
+							c.assignWork(&c.workers[i])
+							break
+						}
+					}
+					c.urlmux.Unlock()
+				} else {
+					c.urlmux.Unlock()
+					time.Sleep(100 * time.Millisecond)
+				}
 			}
 		}
-	}
+	}()
+
+	return nil
 }
 
 // Is the crawler currently running or is it stopped?
 func (c *Crawler) IsRunning() bool {
 	return c.state
+}
+
+// Stop a running crawler. This stops all new work but doesn't cancel ongoing jobs
+// After calling Stop(), call Wait() to wait for everything to finish
+func (c *Crawler) Stop() {
+	c.state = false
+}
+
+// Wait for the crawler to finish
+// Calling this within a Handler function will cause a deadlock. Don't do this.
+func (c *Crawler) Wait() {
+	for {
+		c.urlmux.RLock()
+		numRunning := len(c.urlindex[StateRunning])
+		c.urlmux.RUnlock()
+		if numRunning == 0 && c.state == false {
+			return
+		} else {
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
 }
 
 // Add a URL to the crawler.
