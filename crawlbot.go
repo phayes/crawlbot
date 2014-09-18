@@ -79,11 +79,14 @@ type Crawler struct {
 	// If you wish to rate-throttle your crawler you would do so by implemting a custom http.Client
 	Client func() *http.Client
 
-	workers  []worker                  // List of all workers
-	urlstate map[string]State          // List of URLs and their current state.
-	urlindex map[State]map[string]bool // Index of URLs by their state
-	urlmux   sync.RWMutex              // A mutex for protecting urlstate and urlindex
-	state    bool                      // True means running. False means stopped.
+	// Set this to true and the crawler will not stop by itself, you will need to explicitly call Stop()
+	// This is useful when you need a long-running crawler that you occationally feed new urls via Add()
+	Persistent bool
+
+	workers  []worker   // List of all workers
+	running  bool       // True means running. False means stopped.
+	mux      sync.Mutex // A mutex to coordiate starting and stopping the crawler
+	urlstate *urls      // Ongoing working set of URLs
 }
 
 // Create a new simple crawler.
@@ -95,11 +98,14 @@ func NewCrawler(url string, handler func(resp *Response), numworkers int) *Crawl
 // Start crawling. Start() will immidiately return; if you wish to wait for the crawl to finish
 // you will want to cal Wait() after calling Start().
 func (c *Crawler) Start() error {
+	c.mux.Lock()
+	defer c.mux.Unlock()
+
 	// Check to see if the crawler is already running
-	if c.state {
+	if c.running {
 		return errors.New("Cannot start crawler that is already running")
 	} else {
-		c.state = true
+		c.running = true
 	}
 
 	// Sanity check
@@ -128,7 +134,12 @@ func (c *Crawler) Start() error {
 	}
 
 	// Initialize urlstate and the starting URLs
-	c.initializeURLs()
+	if c.urlstate == nil {
+		c.urlstate = NewUrls(c.URLs)
+	} else {
+		// If it's already initialized, just rebuild the index
+		c.urlstate.buildIndex()
+	}
 
 	// Initialize worker communication channels
 	results := make(chan result)
@@ -146,63 +157,30 @@ func (c *Crawler) Start() error {
 		for {
 			select {
 			case res := <-results:
-				c.urlmux.Lock()
-
-				res.owner.teardown()
-
-				if res.err == ErrHeaderRejected {
-					c.urlstate[res.url] = StateRejected
-					delete(c.urlindex[StateRunning], res.url)
-					c.urlindex[StateRejected][res.url] = true
-				} else {
-					c.urlstate[res.url] = StateDone
-					delete(c.urlindex[StateRunning], res.url)
-					c.urlindex[StateDone][res.url] = true
-				}
-
-				if res.err == nil {
-					// Add the new items to our map
-					for _, newurl := range res.newurls {
-						if _, ok := c.urlstate[newurl]; ok {
-							continue // Ignore URLs we already have
-						}
-						if c.CheckURL(c, newurl) {
-							c.urlstate[newurl] = StatePending
-							c.urlindex[StatePending][newurl] = true
-						} else {
-							c.urlstate[newurl] = StateRejected
-							c.urlindex[StateRejected][newurl] = true
-						}
-					}
-				}
-
-				// Assign more work to the worker
-				// If there's no work to do or we're supposex to stop then skip
-				if len(c.urlindex[StatePending]) == 0 || !c.state {
-					c.urlmux.Unlock()
-					continue // continue select
-				}
-
-				c.assignWork(res.owner)
-				c.urlmux.Unlock()
+				c.processResult(res)
 			default:
-				c.urlmux.Lock()
+				c.mux.Lock()
 				// If there is nothing running and either we have nothing pending or we are in a stopped state, then we're done
-				if len(c.urlindex[StateRunning]) == 0 && (len(c.urlindex[StatePending]) == 0 || !c.state) {
+				if c.urlstate.numstate(StateRunning) == 0 && (c.urlstate.numstate(StatePending) == 0 || !c.running) {
 					// We're done
-					c.state = false
-					c.urlmux.Unlock()
+					c.running = false
+					c.mux.Unlock()
 					return
-				} else if len(c.urlindex[StatePending]) != 0 && c.state {
+				} else if c.urlstate.numstate(StatePending) != 0 && c.running {
 					for i := range c.workers {
 						if !c.workers[i].state {
-							c.assignWork(&c.workers[i])
+							newurl, ok := c.urlstate.selectPending()
+							if !ok {
+								panic("No pending urls to process despite numstate reporting available pending items")
+							}
+							c.workers[i].setup(newurl)
+							c.workers[i].process()
 							break
 						}
 					}
-					c.urlmux.Unlock()
+					c.mux.Unlock()
 				} else {
-					c.urlmux.Unlock()
+					c.mux.Unlock()
 					time.Sleep(100 * time.Millisecond)
 				}
 			}
@@ -214,25 +192,31 @@ func (c *Crawler) Start() error {
 
 // Is the crawler currently running or is it stopped?
 func (c *Crawler) IsRunning() bool {
-	return c.state
+	c.mux.Lock()
+	defer c.mux.Unlock()
+
+	return c.running
 }
 
 // Stop a running crawler. This stops all new work but doesn't cancel ongoing jobs.
 // After calling Stop(), call Wait() to wait for everything to finish
 func (c *Crawler) Stop() {
-	c.state = false
+	c.mux.Lock()
+	defer c.mux.Unlock()
+
+	c.running = false
 }
 
 // Wait for the crawler to finish, blocking until it's done.
 // Calling this within a Handler function will cause a deadlock. Don't do this.
 func (c *Crawler) Wait() {
 	for {
-		c.urlmux.RLock()
-		numRunning := len(c.urlindex[StateRunning])
-		c.urlmux.RUnlock()
-		if numRunning == 0 && c.state == false {
+		c.mux.Lock()
+		if c.urlstate.numstate(StateRunning) == 0 && c.running == false {
+			c.mux.Unlock()
 			return
 		} else {
+			c.mux.Unlock()
 			time.Sleep(50 * time.Millisecond)
 		}
 	}
@@ -241,67 +225,35 @@ func (c *Crawler) Wait() {
 // Add a URL to the crawler.
 // If the item already exists this is a no-op.
 // TODO: change this behavior so an item is re-queued if it already exists -- tricky if the item is StateRunning
-func (c *Crawler) AddURL(url string) {
-	c.urlmux.Lock()
-	if _, ok := c.urlstate[url]; ok {
-		return
-	}
-	c.urlstate[url] = StatePending
-	c.urlindex[StatePending][url] = true
-	c.urlmux.Unlock()
+func (c *Crawler) Add(url string) {
+	c.urlstate.add([]string{url})
 }
 
 // Get the current state for a URL.
-func (c *Crawler) GetURL(url string) State {
-	c.urlmux.RLock()
-	defer c.urlmux.RUnlock()
-
-	state, ok := c.urlstate[url]
-	if !ok {
-		return StateNotFound
-	}
-
-	return state
+func (c *Crawler) State(url string) State {
+	return c.urlstate.state(url)
 }
 
-// Assign work to a worker. Calling this function is unsafe unless wrapped inside a mutex lock
-func (c *Crawler) assignWork(w *worker) {
-	for url := range c.urlindex[StatePending] {
-		c.urlstate[url] = StateRunning
+func (c *Crawler) processResult(res result) {
+	c.mux.Lock()
+	defer c.mux.Unlock()
 
-		// Update the index
-		delete(c.urlindex[StatePending], url)
-		c.urlindex[StateRunning][url] = true
+	res.owner.teardown()
 
-		// Assign work and return true
-		w.setup(url)
-		w.process()
-		break
-	}
-}
-
-// Build the index.
-func (c *Crawler) initializeURLs() {
-	c.urlmux.Lock()
-
-	if c.urlstate == nil {
-		c.urlstate = make(map[string]State)
-	}
-	for _, url := range c.URLs {
-		if _, ok := c.urlstate[url]; !ok {
-			c.urlstate[url] = StatePending
-		}
+	if res.err == ErrHeaderRejected {
+		c.urlstate.changeState(res.url, StateRejected)
+	} else {
+		c.urlstate.changeState(res.url, StateDone)
 	}
 
-	// Build the index
-	c.urlindex = make(map[State]map[string]bool)
-	for _, state := range []State{StatePending, StateRejected, StateRunning, StateDone} {
-		c.urlindex[state] = make(map[string]bool)
+	if res.err == nil {
+		c.urlstate.add(res.newurls)
 	}
 
-	for url, state := range c.urlstate {
-		c.urlindex[state][url] = true
+	// Assign more work to the worker
+	newurl, ok := c.urlstate.selectPending()
+	if ok {
+		res.owner.setup(newurl)
+		res.owner.process()
 	}
-
-	c.urlmux.Unlock()
 }
