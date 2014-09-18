@@ -250,10 +250,12 @@ func (c *Crawler) processResult(res result) {
 		c.urlstate.add(res.newurls)
 	}
 
-	// Assign more work to the worker
-	newurl, ok := c.urlstate.selectPending()
-	if ok {
-		res.owner.setup(newurl)
-		res.owner.process()
+	// Assign more work to the worker if we are running
+	if c.running {
+		newurl, ok := c.urlstate.selectPending()
+		if ok {
+			res.owner.setup(newurl)
+			res.owner.process()
+		}
 	}
 }
