@@ -1,6 +1,7 @@
 package crawlbot
 
 import (
+	"github.com/PuerkitoBio/goquery"
 	"mime"
 	"net/http"
 	"net/url"
@@ -52,12 +53,7 @@ func defaultCheckHeader(crawler *Crawler, url string, status int, header http.He
 func defaultLinkFinder(resp *Response) []string {
 	var newurls = make([]string, 0)
 
-	// If the document couldn't be parsed, there's nothing to do
-	if resp.Doc == nil {
-		return newurls
-	}
-
-	alinks, err := resp.Doc.Search("//a")
+	doc, err := goquery.NewDocumentFromReader(resp.Body)
 	if err != nil {
 		return newurls
 	}
@@ -67,15 +63,16 @@ func defaultLinkFinder(resp *Response) []string {
 		return newurls
 	}
 
-	for _, alink := range alinks {
-		link := alink.Attr("href")
-		parsedLink, err := url.Parse(link)
-		if err != nil {
-			continue
+	doc.Find("a").Each(func(i int, s *goquery.Selection) {
+		link, ok := s.Attr("href")
+		if ok {
+			parsedLink, err := url.Parse(link)
+			if err == nil {
+				absLink := parsedURL.ResolveReference(parsedLink)
+				newurls = append(newurls, absLink.String())
+			}
 		}
-		absLink := parsedURL.ResolveReference(parsedLink)
-		newurls = append(newurls, absLink.String())
-	}
+	})
 
 	return newurls
 }

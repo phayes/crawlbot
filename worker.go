@@ -1,13 +1,10 @@
 package crawlbot
 
 import (
+	"bytes"
 	"errors"
-	"github.com/moovweb/gokogiri/html"
-	"github.com/moovweb/gokogiri/xml"
 	"io/ioutil"
-	"mime"
 	"net/http"
-	"strings"
 )
 
 var ErrHeaderRejected = errors.New("Header Checker rejected URL")
@@ -67,28 +64,15 @@ func (w *worker) process() {
 		}
 
 		// Read the body
-		resp.Bytes, resp.Err = ioutil.ReadAll(resp.Body)
+		resp.bytes, resp.Err = ioutil.ReadAll(resp.Body)
 		resp.Body.Close()
 		if resp.Err != nil {
 			w.crawler.Handler(&resp)
 			w.sendResults(nil, resp.Err)
 			return
 		}
-
-		// Parse the HTML / XML
-		if contentType := resp.Header.Get("Content-Type"); contentType != "" {
-			mediaType, _, err := mime.ParseMediaType(contentType)
-			if err == nil {
-				if mediaType == "text/html" {
-					var htmldoc *html.HtmlDocument
-					htmldoc, resp.Err = html.Parse(resp.Bytes, html.DefaultEncodingBytes, []byte(w.url), html.DefaultParseOption, html.DefaultEncodingBytes)
-					resp.Doc = htmldoc.XmlDocument
-				} else if mediaType == "application/xml" || mediaType == "text/xml" || strings.HasSuffix(mediaType, "+xml") {
-					resp.Doc, resp.Err = xml.Parse(resp.Bytes, html.DefaultEncodingBytes, []byte(w.url), html.DefaultParseOption, html.DefaultEncodingBytes)
-				}
-				defer resp.Doc.Free()
-			}
-		}
+		// Replace the body with a readCloser that reads from bytes
+		resp.Body = &readCloser{bytes.NewReader(resp.bytes)}
 
 		// Process the handler
 		w.crawler.Handler(&resp)
@@ -110,4 +94,13 @@ func (w *worker) sendResults(newurls []string, err error) {
 	}
 
 	w.results <- result
+}
+
+// ReadCloser is a dummy type that makes bytes.Reader compatible with ReadCloser so we can use it to replace Body
+type readCloser struct {
+	*bytes.Reader
+}
+
+func (r *readCloser) Close() error {
+	return nil
 }

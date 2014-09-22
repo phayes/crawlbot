@@ -2,7 +2,6 @@ package crawlbot
 
 import (
 	"errors"
-	"github.com/moovweb/gokogiri/xml"
 	"net/http"
 	"sync"
 	"time"
@@ -24,7 +23,6 @@ const (
 // A crawlbot.Response is an http.Response with a few extra fields.
 type Response struct {
 	// The http.Reponse object
-	// Do not read from Body as it has already been consumed and closed, instead use Response.Bytes
 	*http.Response
 
 	// The for this Response
@@ -38,13 +36,9 @@ type Response struct {
 	// Calling Crawler.Wait() from within your Handler will cause a deadlock. Don't do this.
 	Crawler *Crawler
 
-	// Parsed gokogiri XML Document. It will be parsed using an HTML or XML parser depending on the Content Type
-	// This will be nil if the document was not recognized as html or xml
-	Doc *xml.XmlDocument
-
 	// The Body of the http.Reponse has already been consumed by the time the response is passed to Handler.
-	// Instead of reading from Body you should use Response.Bytes.
-	Bytes []byte
+	// bytes contains the read Body
+	bytes []byte
 }
 
 type Crawler struct {
