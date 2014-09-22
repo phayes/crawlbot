@@ -10,7 +10,7 @@ type urls struct {
 	index        map[State]map[string]bool // Index of URLs by their state
 }
 
-func NewUrls(seeds []string) *urls {
+func newUrls(seeds []string) *urls {
 	u := urls{
 		urls:  make(map[string]State),
 		index: make(map[State]map[string]bool),

@@ -129,7 +129,7 @@ func (c *Crawler) Start() error {
 
 	// Initialize urlstate and the starting URLs
 	if c.urlstate == nil {
-		c.urlstate = NewUrls(c.URLs)
+		c.urlstate = newUrls(c.URLs)
 	} else {
 		// If it's already initialized, just rebuild the index
 		c.urlstate.buildIndex()
