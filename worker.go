@@ -76,6 +76,7 @@ func (w *worker) process() {
 
 		// Process the handler
 		w.crawler.Handler(&resp)
+		resp.Body = &readCloser{bytes.NewReader(resp.bytes)}
 
 		// Find links and finish
 		newurls := w.crawler.LinkFinder(&resp)
