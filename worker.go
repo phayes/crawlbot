@@ -79,7 +79,12 @@ func (w *worker) process() {
 		resp.Body = &readCloser{bytes.NewReader(resp.bytes)}
 
 		// Find links and finish
-		newurls := w.crawler.LinkFinder(&resp)
+		newurls := make([]string, 0)
+		for _, url := range w.crawler.LinkFinder(&resp) {
+			if w.crawler.CheckURL(w.crawler, url) {
+				newurls = append(newurls, url)
+			}
+		}
 
 		// We're done, return the results
 		w.sendResults(newurls, nil)
