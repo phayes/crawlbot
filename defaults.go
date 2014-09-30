@@ -53,6 +53,10 @@ func defaultCheckHeader(crawler *Crawler, url string, status int, header http.He
 func defaultLinkFinder(resp *Response) []string {
 	var newurls = make([]string, 0)
 
+	if !defaultCheckHeader(resp.Crawler, resp.URL, resp.StatusCode, resp.Header) {
+		return newurls
+	}
+
 	doc, err := goquery.NewDocumentFromReader(resp.Body)
 	if err != nil {
 		return newurls
@@ -67,6 +71,7 @@ func defaultLinkFinder(resp *Response) []string {
 		link, ok := s.Attr("href")
 		if ok {
 			parsedLink, err := url.Parse(link)
+			parsedLink.Fragment = "" // Unset the #fragment if it exists
 			if err == nil {
 				absLink := parsedURL.ResolveReference(parsedLink)
 				newurls = append(newurls, absLink.String())
