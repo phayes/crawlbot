@@ -2,50 +2,52 @@ package crawlbot
 
 import (
 	"github.com/PuerkitoBio/goquery"
+	"github.com/phayes/errors"
 	"mime"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 )
 
 // The default URL Checker constrains the crawler to the domains of the seed URLs
-func defaultCheckURL(crawler *Crawler, checkurl string) bool {
+func defaultCheckURL(crawler *Crawler, checkurl string) error {
 	parsedURL, err := url.Parse(checkurl)
 	if err != nil {
-		return false
+		return err
 	}
 	for _, seedURL := range crawler.URLs {
 		parsedSeed, err := url.Parse(seedURL)
 		if err != nil {
-			return false
+			return err
 		}
 		if parsedSeed.Host == parsedURL.Host {
-			return true
+			return nil
 		}
 	}
-	return false
+	return errors.New("URL not in approved domain")
 }
 
 // The default header checker will only proceed if it's 200 OK and an HTML Content-Type
-func defaultCheckHeader(crawler *Crawler, url string, status int, header http.Header) bool {
+func defaultCheckHeader(crawler *Crawler, url string, status int, header http.Header) error {
 	if status != 200 {
-		return false
+		return errors.RWraps(ErrBadHttpCode, "Received "+strconv.Itoa(status)+" "+http.StatusText(status))
 	}
 
 	contentType := header.Get("Content-Type")
 	if contentType == "" {
-		return false
+		return errors.RWraps(ErrBadContentType, "Content-Type header missing")
 	}
 
 	mediaType, _, err := mime.ParseMediaType(contentType)
 	if err != nil {
-		return false
+		return errors.RWraps(ErrBadContentType, "Malformated Content-Type header")
 	}
 
 	if mediaType == "text/html" || mediaType == "application/xhtml+xml" {
-		return true
+		return nil
 	} else {
-		return false
+		return errors.RWraps(ErrBadContentType, mediaType+" is not supported")
 	}
 }
 
@@ -53,7 +55,7 @@ func defaultCheckHeader(crawler *Crawler, url string, status int, header http.He
 func defaultLinkFinder(resp *Response) []string {
 	var newurls = make([]string, 0)
 
-	if !defaultCheckHeader(resp.Crawler, resp.URL, resp.StatusCode, resp.Header) {
+	if defaultCheckHeader(resp.Crawler, resp.URL, resp.StatusCode, resp.Header) != nil {
 		return newurls
 	}
 

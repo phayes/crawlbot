@@ -2,12 +2,10 @@ package crawlbot
 
 import (
 	"bytes"
-	"errors"
+	"github.com/phayes/errors"
 	"io/ioutil"
 	"net/http"
 )
-
-var ErrHeaderRejected = errors.New("Header Checker rejected URL")
 
 type worker struct {
 	state   bool         // true means busy / unavailable. false means idling and is ready for new work
@@ -47,17 +45,17 @@ func (w *worker) process() {
 			resp = Response{}
 		}
 		resp.URL = w.url
-		resp.Err = err
 		resp.Crawler = w.crawler
-		if resp.Err != nil {
+		if err != nil {
+			resp.Err = errors.Wrap(err, ErrReqFailed)
 			w.crawler.Handler(&resp)
 			w.sendResults(nil, resp.Err)
 			return
 		}
 
 		// Check headers using HeaderCheck
-		if !w.crawler.CheckHeader(w.crawler, w.url, resp.StatusCode, resp.Header) {
-			resp.Err = ErrHeaderRejected
+		if err = w.crawler.CheckHeader(w.crawler, w.url, resp.StatusCode, resp.Header); err != nil {
+			resp.Err = errors.Wrap(err, ErrHeaderRejected)
 			w.crawler.Handler(&resp)
 			resp.Body.Close()
 			w.sendResults(nil, resp.Err)
@@ -65,9 +63,10 @@ func (w *worker) process() {
 		}
 
 		// Read the body
-		resp.bytes, resp.Err = ioutil.ReadAll(resp.Body)
+		resp.bytes, err = ioutil.ReadAll(resp.Body)
 		resp.Body.Close()
-		if resp.Err != nil {
+		if err != nil {
+			resp.Err = errors.Wrap(err, ErrBodyRead)
 			w.crawler.Handler(&resp)
 			w.sendResults(nil, resp.Err)
 			return
@@ -82,7 +81,7 @@ func (w *worker) process() {
 		// Find links and finish
 		newurls := make([]string, 0)
 		for _, url := range w.crawler.LinkFinder(&resp) {
-			if w.crawler.CheckURL(w.crawler, url) {
+			if err := w.crawler.CheckURL(w.crawler, url); err == nil {
 				newurls = append(newurls, url)
 			}
 		}

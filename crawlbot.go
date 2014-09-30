@@ -1,7 +1,7 @@
 package crawlbot
 
 import (
-	"errors"
+	"github.com/phayes/errors"
 	"net/http"
 	"sync"
 	"time"
@@ -17,6 +17,16 @@ const (
 	StateRunning  State = iota
 	StateRejected State = iota
 	StateDone     State = iota
+)
+
+var (
+	ErrReqFailed      = errors.New("HTTP request failed")
+	ErrBodyRead       = errors.New("Error reading HTTP response body")
+	ErrAlreadyStarted = errors.New("Cannot start crawler that is already running")
+	ErrHeaderRejected = errors.New("CheckHeader rejected URL")
+	ErrURLRejected    = errors.New("CheckURL rejected URL")
+	ErrBadHttpCode    = errors.New("Bad HTTP reponse code")
+	ErrBadContentType = errors.New("Unsupported Content-Type")
 )
 
 // When handling a crawled page a Response is passed to the Handler function.
@@ -53,14 +63,15 @@ type Crawler struct {
 	// There is no default. If Handler is not set the crawler will panic.
 	Handler func(resp *Response)
 
-	// Before a URL is crawled it is passed to this function to see if it should be followed or not.
+	// Before a URL is crawled it is passed to this function to see if it should be followed or not. A good url should return nil.
 	// By default we follow the link if it's in one of the same domains as our seed URLs.
-	CheckURL func(crawler *Crawler, url string) bool
+	CheckURL func(crawler *Crawler, url string) error
 
 	// Before reading in the body we can check the headers to see if we want to continue.
 	// By default we abort if it's not HTTP 200 OK or not an html Content-Type.
-	// Override this function if you wish to handle non-html files such as binary images
-	CheckHeader func(crawler *Crawler, url string, status int, header http.Header) bool
+	// Override this function if you wish to handle non-html files such as binary images.
+	// This function should return nil if we wish to continue and read the body.
+	CheckHeader func(crawler *Crawler, url string, status int, header http.Header) error
 
 	// This function is called to find new urls in the document to crawl. By default it will
 	// find all <a href> links in an html document. Override this function if you wish to follow
@@ -97,7 +108,7 @@ func (c *Crawler) Start() error {
 
 	// Check to see if the crawler is already running
 	if c.running {
-		return errors.New("Cannot start crawler that is already running")
+		return ErrAlreadyStarted
 	} else {
 		c.running = true
 	}
