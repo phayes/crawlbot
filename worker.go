@@ -57,8 +57,9 @@ func (w *worker) process() {
 
 		// Check headers using HeaderCheck
 		if !w.crawler.CheckHeader(w.crawler, w.url, resp.StatusCode, resp.Header) {
-			resp.Body.Close()
 			resp.Err = ErrHeaderRejected
+			w.crawler.Handler(&resp)
+			resp.Body.Close()
 			w.sendResults(nil, resp.Err)
 			return
 		}
