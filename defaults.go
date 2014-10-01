@@ -31,23 +31,23 @@ func defaultCheckURL(crawler *Crawler, checkurl string) error {
 // The default header checker will only proceed if it's 200 OK and an HTML Content-Type
 func defaultCheckHeader(crawler *Crawler, url string, status int, header http.Header) error {
 	if status != 200 {
-		return errors.RWraps(ErrBadHttpCode, "Received "+strconv.Itoa(status)+" "+http.StatusText(status))
+		return errors.Appends(ErrBadHttpCode, "Received "+strconv.Itoa(status)+" "+http.StatusText(status))
 	}
 
 	contentType := header.Get("Content-Type")
 	if contentType == "" {
-		return errors.RWraps(ErrBadContentType, "Content-Type header missing")
+		return errors.Appends(ErrBadContentType, "Content-Type header missing")
 	}
 
 	mediaType, _, err := mime.ParseMediaType(contentType)
 	if err != nil {
-		return errors.RWraps(ErrBadContentType, "Malformated Content-Type header")
+		return errors.Appends(ErrBadContentType, "Malformated Content-Type header")
 	}
 
 	if mediaType == "text/html" || mediaType == "application/xhtml+xml" {
 		return nil
 	} else {
-		return errors.RWraps(ErrBadContentType, mediaType+" is not supported")
+		return errors.Appends(ErrBadContentType, mediaType+" is not supported")
 	}
 }
 
