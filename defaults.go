@@ -69,7 +69,7 @@ func defaultLinkFinder(resp *Response) []string {
 		return newurls
 	}
 
-	doc.Find("a").Each(func(i int, s *goquery.Selection) {
+	doc.Find("a:not([rel='nofollow'])").Each(func(i int, s *goquery.Selection) {
 		link, ok := s.Attr("href")
 		if ok {
 			parsedLink, err := url.Parse(link)
